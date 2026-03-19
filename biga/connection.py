@@ -151,9 +151,12 @@ class InterGroupConnection(nn.Module):
             # Применяем маску разреженности при инициализации и после каждого шага
             if hasattr(self, '_sparse_mask_ee') and self._sparse_mask_ee is not None:
                 self.w_ee.data *= self._sparse_mask_ee
-                self.w_ei.data *= self._sparse_mask_ee
-                self.w_ie.data *= self._sparse_mask_ie if hasattr(self, '_sparse_mask_ie') else 1.0
-                self.w_ii.data *= self._sparse_mask_ii if hasattr(self, '_sparse_mask_ii') else 1.0
+            if hasattr(self, '_sparse_mask_ei') and self._sparse_mask_ei is not None:
+                self.w_ei.data *= self._sparse_mask_ei
+            if hasattr(self, '_sparse_mask_ie') and self._sparse_mask_ie is not None:
+                self.w_ie.data *= self._sparse_mask_ie
+            if hasattr(self, '_sparse_mask_ii') and self._sparse_mask_ii is not None:
+                self.w_ii.data *= self._sparse_mask_ii
 
             row_sums = self.w_ee.sum(dim=1, keepdim=True)
             self.w_ee.data /= torch.clamp(row_sums / _ROW_SUM_CAP, min=1.0)
