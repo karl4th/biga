@@ -51,7 +51,7 @@ class BIGA(nn.Module):
         groups_config: Dict[str, GroupConfig],
         max_seq_len: int = 512,
         dt: float = 0.1,
-        ewc_lambda: float = 1000.0,
+        ewc_lambda: float = 2000.0,
     ):
         super().__init__()
         self.vocab_size = vocab_size
