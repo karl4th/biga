@@ -653,7 +653,8 @@ def write_report(results: dict, elapsed: dict, groups_config: dict, version: str
     total_time = sum(elapsed.values())
     lines.append(f"*Суммарное время тестирования: {total_time:.1f}с*")
 
-    report_path = "/Users/karl4th/Documents/research/dream-g/bio_brain/report_full.md"
+    import os
+    report_path = os.path.join(os.path.dirname(__file__), "report_full.md")
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print(f"\n  Отчёт записан: {report_path}")

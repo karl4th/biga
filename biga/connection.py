@@ -12,6 +12,12 @@ from .config import GroupConfig
 # making G output non-trivial (required for noise-robustness test T4).
 _ROW_SUM_CAP = 0.70
 
+# Maximum number of incoming connections per neuron.
+# Biologically plausible sparse connectivity: each neuron connects to
+# at most MAX_CONNECTIONS source neurons (random subset selected at init).
+# This reduces memory and computation for large groups (GROUPS_FULL).
+_MAX_CONNECTIONS = 100
+
 # Lateral inhibition scale vs standard feedforward init.
 # Both pathways scaled: w_ei (I_src→E_tgt) and w_ie (E_src→I_tgt).
 # Scale 6 is strong enough for winner-take-all specialisation (T2) while
@@ -84,13 +90,70 @@ class InterGroupConnection(nn.Module):
         self.w_ie = nn.Parameter(torch.abs(torch.randn(n_g_i, n_h_e) * std_ie))
         self.w_ii = nn.Parameter(-torch.abs(torch.randn(n_g_i, n_h_i) * std_ii))
 
+        # Разреженность: максимум MAX_CONNECTIONS входящих связей на нейрон
+        # Создаём маску для w_ee (n_g_e × n_h_e)
+        self._create_sparse_masks(n_g_e, n_h_e, n_g_i, n_h_i)
+
+    def _create_sparse_masks(
+        self,
+        n_g_e: int, n_h_e: int,
+        n_g_i: int, n_h_i: int,
+    ) -> None:
+        """Создаёт бинарные маски для ограничения числа связей."""
+        with torch.no_grad():
+            # Маска для w_ee: каждый целевой E-нейрон получает ≤ MAX_CONNECTIONS входов
+            max_conn_e = min(_MAX_CONNECTIONS, n_h_e)
+            mask_ee = torch.zeros(n_g_e, n_h_e, dtype=torch.float32)
+            for i in range(n_g_e):
+                indices = torch.randperm(n_h_e)[:max_conn_e]
+                mask_ee[i, indices] = 1.0
+            self.register_buffer('_sparse_mask_ee', mask_ee)
+
+            # Маска для w_ie: каждый целевой I-нейрон получает ≤ MAX_CONNECTIONS входов
+            max_conn_i = min(_MAX_CONNECTIONS, n_h_e)
+            mask_ie = torch.zeros(n_g_i, n_h_e, dtype=torch.float32)
+            for i in range(n_g_i):
+                indices = torch.randperm(n_h_e)[:max_conn_i]
+                mask_ie[i, indices] = 1.0
+            self.register_buffer('_sparse_mask_ie', mask_ie)
+
+            # Маска для w_ei: каждый целевой E-нейрон получает ≤ MAX_CONNECTIONS входов от I
+            max_conn_ei = min(_MAX_CONNECTIONS, n_h_i)
+            mask_ei = torch.zeros(n_g_e, n_h_i, dtype=torch.float32)
+            for i in range(n_g_e):
+                indices = torch.randperm(n_h_i)[:max_conn_ei]
+                mask_ei[i, indices] = 1.0
+            self.register_buffer('_sparse_mask_ei', mask_ei)
+
+            # Маска для w_ii: каждый целевой I-нейрон получает ≤ MAX_CONNECTIONS входов от I
+            max_conn_ii = min(_MAX_CONNECTIONS, n_h_i)
+            mask_ii = torch.zeros(n_g_i, n_h_i, dtype=torch.float32)
+            for i in range(n_g_i):
+                indices = torch.randperm(n_h_i)[:max_conn_ii]
+                mask_ii[i, indices] = 1.0
+            self.register_buffer('_sparse_mask_ii', mask_ii)
+
+            # Применяем маски сразу при инициализации
+            self.w_ee.data *= mask_ee
+            self.w_ei.data *= mask_ei
+            self.w_ie.data *= mask_ie
+            self.w_ii.data *= mask_ii
+
     def clamp_weights(self) -> None:
-        """Знаковые ограничения + row-norm на w_ee для спектральной устойчивости."""
+        """Знаковые ограничения + row-norm на w_ee + разреженность (max 100 связей)."""
         with torch.no_grad():
             self.w_ee.clamp_(min=0.0)
             self.w_ei.clamp_(max=0.0)
             self.w_ie.clamp_(min=0.0)
             self.w_ii.clamp_(max=0.0)
+
+            # Разреженность: максимум MAX_CONNECTIONS входящих связей на нейрон
+            # Применяем маску разреженности при инициализации и после каждого шага
+            if hasattr(self, '_sparse_mask_ee') and self._sparse_mask_ee is not None:
+                self.w_ee.data *= self._sparse_mask_ee
+                self.w_ei.data *= self._sparse_mask_ee
+                self.w_ie.data *= self._sparse_mask_ie if hasattr(self, '_sparse_mask_ie') else 1.0
+                self.w_ii.data *= self._sparse_mask_ii if hasattr(self, '_sparse_mask_ii') else 1.0
 
             row_sums = self.w_ee.sum(dim=1, keepdim=True)
             self.w_ee.data /= torch.clamp(row_sums / _ROW_SUM_CAP, min=1.0)
