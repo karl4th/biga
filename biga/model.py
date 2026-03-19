@@ -219,6 +219,16 @@ class BIGA(nn.Module):
                 else:
                     self._fisher[name] = f
                 self._theta_star[name] = param.data.clone()
+        # Нормализуем Fisher: max(F) → 1.0, чтобы EWC работал
+        # вне зависимости от масштаба градиентов (grad clipping, размер модели).
+        f_max = max(
+            (self._fisher[n].max().item() for n in self._fisher),
+            default=0.0,
+        )
+        if f_max > 0.0:
+            for name in self._fisher:
+                self._fisher[name] /= f_max
+
         self._fisher_accum.clear()
         self._fisher_count = 0
         self._ewc_active = True
