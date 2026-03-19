@@ -66,7 +66,7 @@ class BIGA(nn.Module):
         self.embedding = nn.Embedding(vocab_size, d_emb)
         self.register_buffer(
             'pos_encoding',
-            self._make_pos_encoding(max_seq_len, d_emb),
+            torch.zeros(max_seq_len, d_emb),  # обнулено: pos_enc нарушает маску embedding'а
         )
 
         # ── Входная / выходная проекции ────────────────────────────────────
