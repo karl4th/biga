@@ -27,9 +27,13 @@ from biga import BIGA, GROUPS_FULL, GROUPS_TINY, GROUPS_SMALL
 
 torch.manual_seed(42)
 
-DEVICE = torch.device("cpu")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 VOCAB_SIZE = 256
 D_EMB = 64
+
+print(f"Используемое устройство: {DEVICE}")
+if DEVICE.type == "cuda":
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
 
 # ─── Вспомогательные функции ──────────────────────────────────────────────────
 
