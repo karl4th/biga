@@ -232,7 +232,7 @@ class BIGA(nn.Module):
         with torch.no_grad():
             for name, param in self.named_parameters():
                 if name in self._fisher and name in self._theta_star:
-                    alpha = (self.ewc_lambda * self._fisher[name]).clamp_(max=0.9)
+                    alpha = (self.ewc_lambda * self._fisher[name]).clamp_(max=0.99)
                     delta = param.data - self._theta_star[name]
                     param.data.addcmul_(alpha, delta, value=-1.0)
 
