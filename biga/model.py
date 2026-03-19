@@ -59,6 +59,8 @@ class BIGA(nn.Module):
         self.groups_config = groups_config
         self.dt = dt
         self.ewc_lambda = ewc_lambda
+        self._half_s = groups_config['S'].n_e // 2
+        self._half_d = d_emb // 2
 
         # ── Эмбеддинги и позиционное кодирование ──────────────────────────
         self.embedding = nn.Embedding(vocab_size, d_emb)
@@ -101,18 +103,21 @@ class BIGA(nn.Module):
             row_sums = self.connections['S_to_A2'].w_ee.sum(dim=1, keepdim=True).clamp(min=1e-8)
             self.connections['S_to_A2'].w_ee.data *= (0.70 / row_sums)
 
-        # ── Специализация W_in: разбиваем embedding по половинам ─────────────
-        # S[0:half_s] отвечает на emb[0:half_d], S[half_s:] на emb[half_d:].
-        # Это критично для больших конфигураций (GROUPS_FULL): без этого оба
-        # блока S усредняют один и тот же embedding → A1≈A2 (закон больших чисел).
-        # С разбиением: A1 специализируется на emb[0:half_d], A2 на emb[half_d:].
+        # ── Специализация W_in + Embedding ───────────────────────────────────
+        # W_in: S[0:half_s] отвечает на emb[:half_d], S[half_s:] на emb[half_d:].
+        # Embedding: чётные токены → emb[:half_d], нечётные → emb[half_d:].
+        #
+        # Совместный эффект:
+        #   чётный токен  → emb[:half_d] → S[0:half_s] → A1
+        #   нечётный токен → emb[half_d:] → S[half_s:] → A2
+        #
+        # Сигнал специализации = (кол-во чётных) − (кол-во нечётных) в батче,
+        # что НЕ зависит от размера группы и работает как для TINY, так и для FULL.
         with torch.no_grad():
-            d_emb = self.W_in.weight.shape[1]
-            half_d = d_emb // 2
-            # первая половина S не видит вторую половину embedding
-            self.W_in.weight[:half_s, half_d:].zero_()
-            # вторая половина S не видит первую половину embedding
-            self.W_in.weight[half_s:, :half_d].zero_()
+            self.W_in.weight[:self._half_s, self._half_d:].zero_()
+            self.W_in.weight[self._half_s:, :self._half_d].zero_()
+            self.embedding.weight[::2, self._half_d:].zero_()   # чётные токены
+            self.embedding.weight[1::2, :self._half_d].zero_()  # нечётные токены
 
         # ── EWC: онлайн Elastic Weight Consolidation ───────────────────────
         # Все словари хранят тензоры с тем же устройством, что и параметры.
@@ -157,12 +162,20 @@ class BIGA(nn.Module):
           2. Знаковые ограничения (биологические)
           3. Row-norm W_EE (спектральная устойчивость)
         """
-        # 1. EWC — применяем до знакового ограничения, чтобы θ*_A
-        #    (которое само прошло ограничения) было валидной целью
+        # 1. Поддерживаем структурные маски специализации (W_in, embedding, S→A1/A2)
+        with torch.no_grad():
+            self.W_in.weight.data[:self._half_s, self._half_d:].zero_()
+            self.W_in.weight.data[self._half_s:, :self._half_d].zero_()
+            self.embedding.weight.data[::2, self._half_d:].zero_()
+            self.embedding.weight.data[1::2, :self._half_d].zero_()
+            self.connections['S_to_A1'].w_ee.data[:, self._half_s:].zero_()
+            self.connections['S_to_A2'].w_ee.data[:, :self._half_s].zero_()
+
+        # 2. EWC — применяем до знакового ограничения
         if self._ewc_active and self.ewc_lambda > 0:
             self._apply_ewc()
 
-        # 2. Знаковые ограничения + row-norm
+        # 3. Знаковые ограничения + row-norm
         for group in self.groups.values():
             group.clamp_weights()
         for conn in self.connections.values():
