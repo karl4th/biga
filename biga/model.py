@@ -51,7 +51,7 @@ class BIGA(nn.Module):
         groups_config: Dict[str, GroupConfig],
         max_seq_len: int = 512,
         dt: float = 0.1,
-        ewc_lambda: float = 300.0,
+        ewc_lambda: float = 1000.0,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -91,18 +91,28 @@ class BIGA(nn.Module):
 
         # ── Структурная специализация S→A1 / S→A2 ────────────────────────────
         # Разделяем S-нейроны пополам: A1 отвечает на S[:half], A2 на S[half:].
-        # Это создаёт начальную асимметрию активности (~100× больше, чем
-        # случайные флуктуации), что обеспечивает быстрое WTA-разделение
-        # ассоциативных групп уже в первые несколько шагов динамики.
         with torch.no_grad():
             n_s = groups_config['S'].n_e
-            half = n_s // 2
-            self.connections['S_to_A1'].w_ee[:, half:].zero_()
+            half_s = n_s // 2
+            self.connections['S_to_A1'].w_ee[:, half_s:].zero_()
             row_sums = self.connections['S_to_A1'].w_ee.sum(dim=1, keepdim=True).clamp(min=1e-8)
             self.connections['S_to_A1'].w_ee.data *= (0.70 / row_sums)
-            self.connections['S_to_A2'].w_ee[:, :half].zero_()
+            self.connections['S_to_A2'].w_ee[:, :half_s].zero_()
             row_sums = self.connections['S_to_A2'].w_ee.sum(dim=1, keepdim=True).clamp(min=1e-8)
             self.connections['S_to_A2'].w_ee.data *= (0.70 / row_sums)
+
+        # ── Специализация W_in: разбиваем embedding по половинам ─────────────
+        # S[0:half_s] отвечает на emb[0:half_d], S[half_s:] на emb[half_d:].
+        # Это критично для больших конфигураций (GROUPS_FULL): без этого оба
+        # блока S усредняют один и тот же embedding → A1≈A2 (закон больших чисел).
+        # С разбиением: A1 специализируется на emb[0:half_d], A2 на emb[half_d:].
+        with torch.no_grad():
+            d_emb = self.W_in.weight.shape[1]
+            half_d = d_emb // 2
+            # первая половина S не видит вторую половину embedding
+            self.W_in.weight[:half_s, half_d:].zero_()
+            # вторая половина S не видит первую половину embedding
+            self.W_in.weight[half_s:, :half_d].zero_()
 
         # ── EWC: онлайн Elastic Weight Consolidation ───────────────────────
         # Все словари хранят тензоры с тем же устройством, что и параметры.
