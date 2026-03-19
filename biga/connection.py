@@ -57,10 +57,13 @@ class InterGroupConnection(nn.Module):
         # E[row_sum w_ee] = n_h_e * std_ee * sqrt(2/π) ≈ ROW_SUM_CAP — насыщаем cap сразу,
         # чтобы незаученная модель уже имела реальный сигнал (нужно для T4).
         _sqrt2_over_pi = math.sqrt(2.0 / math.pi)  # ≈ 0.798
-        std_ee = _ROW_SUM_CAP / (n_h_e * _sqrt2_over_pi)
-        std_ei = (n_h_e / n_h_i) * std_ee   # E/I баланс (для латеральных связей)
-        std_ie = std_ee
-        std_ii = std_ei
+        # Нормировка по реальному числу входящих связей (с учётом разреженности)
+        n_h_e_eff = min(n_h_e, _MAX_CONNECTIONS)
+        n_h_i_eff = min(n_h_i, _MAX_CONNECTIONS)
+        std_ee = _ROW_SUM_CAP / (n_h_e_eff * _sqrt2_over_pi)
+        std_ei = (n_h_e_eff / n_h_i_eff) * std_ee   # E/I баланс (для латеральных связей)
+        std_ie = _ROW_SUM_CAP / (n_h_e_eff * _sqrt2_over_pi)
+        std_ii = (n_h_e_eff / n_h_i_eff) * std_ie
 
         if lateral:
             # Латеральное торможение: только w_ei крупное.
